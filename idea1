@@ -1,0 +1,972 @@
+Here is the complete commercial Flutter Recording SDK architecture with all diagrams, folder structures, native APIs, and implementation plans.
+
+---
+
+## 1. Complete Folder Structure
+
+```
+flutter_recording_sdk/
+├── pubspec.yaml
+├── analysis_options.yaml
+│
+├── lib/                              # Dart SDK Layer
+│   ├── flutter_recording_sdk.dart    # Public API exports
+│   ├── src/
+│   │   ├── core/
+│   │   │   ├── flutter_recorder.dart       # Singleton entry point
+│   │   │   ├── recording_session.dart      # Per-session state machine
+│   │   │   ├── session_state.dart          # State enum + transitions
+│   │   │   └── sdk_config.dart             # Global SDK configuration
+│   │   │
+│   │   ├── capture/
+│   │   │   ├── frame_capture.dart          # 30fps scheduler
+│   │   │   ├── frame_deduplicator.dart     # Skip duplicate frames
+│   │   │   └── texture_bridge.dart         # Flutter ↔ Native texture
+│   │   │
+│   │   ├── audio/
+│   │   │   ├── audio_pipeline.dart         # TTS + Mic mixer controller
+│   │   │   ├── tts_controller.dart         # AI voice feed
+│   │   │   ├── mic_controller.dart         # Microphone capture
+│   │   │   └── audio_config.dart           # Sample rate, channels, etc.
+│   │   │
+│   │   ├── encoder/
+│   │   │   ├── video_encoder.dart          # Abstract plugin interface
+│   │   │   ├── audio_encoder.dart          # Abstract plugin interface
+│   │   │   ├── muxer.dart                  # Abstract plugin interface
+│   │   │   └── encoded_packet.dart         # Data model
+│   │   │
+│   │   ├── upload/
+│   │   │   ├── upload_manager.dart         # Chunked upload orchestrator
+│   │   │   ├── upload_backend.dart         # Abstract plugin interface
+│   │   │   ├── resume_tracker.dart         # ETag + offset persistence
+│   │   │   └── chunk_uploader.dart         # Per-chunk upload logic
+│   │   │
+│   │   ├── recovery/
+│   │   │   ├── crash_recovery.dart         # WAL + checkpoint manager
+│   │   │   ├── wal_log.dart                # Write-ahead log writer
+│   │   │   ├── checkpoint.dart             # State snapshot
+│   │   │   └── mp4_repair.dart             # Partial file validator
+│   │   │
+│   │   ├── memory/
+│   │   │   ├── buffer_pool.dart            # Object recycling
+│   │   │   ├── memory_arena.dart           # Pre-allocated arena
+│   │   │   └── memory_pressure_handler.dart # OS callback handler
+│   │   │
+│   │   ├── platform/
+│   │   │   ├── native_bridge.dart          # Pigeon/FFI bridge
+│   │   │   ├── platform_recorder.dart      # Platform abstraction
+│   │   │   └── method_channels.dart        # Channel definitions
+│   │   │
+│   │   ├── analytics/
+│   │   │   ├── metrics_collector.dart      # Performance telemetry
+│   │   │   ├── analytics_backend.dart      # Abstract plugin
+│   │   │   └── recording_event.dart        # Event data model
+│   │   │
+│   │   └── models/
+│   │       ├── recorder_config.dart        # SDK configuration
+│   │       ├── recording_result.dart       # Output metadata
+│   │       ├── video_config.dart           # Encoder settings
+│   │       ├── audio_config.dart           # Audio settings
+│   │       └── upload_config.dart          # Cloud settings
+│   │
+│   └── plugins/                          # Built-in plugin implementations
+│       ├── encoders/
+│       │   ├── media_codec_encoder.dart    # Android H.264
+│       │   ├── video_toolbox_encoder.dart  # iOS H.264
+│       │   └── software_encoder.dart       # Fallback
+│       ├── muxers/
+│       │   ├── mp4_muxer.dart
+│       │   └── fragmented_mp4_muxer.dart
+│       ├── uploads/
+│       │   ├── s3_backend.dart
+│       │   ├── gcs_backend.dart
+│       │   └── azure_backend.dart
+│       └── analytics/
+│           ├── firebase_analytics.dart
+│           └── segment_analytics.dart
+│
+├── android/                            # Android Native Layer
+│   ├── build.gradle
+│   ├── settings.gradle
+│   └── src/main/
+│       ├── kotlin/com/recorder/sdk/
+│       │   ├── FlutterRecorderPlugin.kt      # Plugin registration
+│       │   ├── NativeRecorder.kt             # Main native coordinator
+│       │   ├── EglManager.kt                 # EGL context + FBO
+│       │   ├── VideoEncoder.kt               # MediaCodec wrapper
+│       │   ├── AudioEncoder.kt               # AAC encoder
+│       │   ├── MediaMuxerWrapper.kt          # MP4 muxer
+│       │   ├── ForegroundService.kt          # Background recording
+│       │   ├── UploadService.kt              # Background upload
+│       │   └── CrashRecoveryManager.kt       # WAL + checkpoint
+│       │
+│       ├── cpp/
+│       │   ├── CMakeLists.txt
+│       │   ├── audio_graph.cpp               # C++ audio DAG
+│       │   ├── audio_graph.h
+│       │   ├── nodes/
+│       │   │   ├── aec_node.cpp              # Echo cancellation
+│       │   │   ├── ns_node.cpp               # Noise suppression
+│       │   │   ├── agc_node.cpp              # Auto gain control
+│       │   │   ├── mixer_node.cpp            # Float32 mixing
+│       │   │   └── src_node.cpp              # Sample rate conversion
+│       │   ├── buffers/
+│       │   │   ├── spsc_ring_buffer.h        # Lock-free queue
+│       │   │   └── buffer_pool.cpp           # Object recycling
+│       │   ├── sync/
+│       │   │   ├── timestamp_sync.cpp        # Monotonic clock
+│       │   │   └── drift_corrector.cpp       # A/V sync
+│       │   ├── recovery/
+│       │   │   ├── wal_log.cpp               # Write-ahead log
+│       │   │   └── checkpoint.cpp            # State snapshot
+│       │   └── webrtc/
+│       │       └── (WebRTC APM static lib)
+│       │
+│       └── AndroidManifest.xml
+│
+├── ios/                                # iOS Native Layer
+│   ├── flutter_recording_sdk.podspec
+│   └── Classes/
+│       ├── FlutterRecorderPlugin.swift     # Plugin registration
+│       ├── InterviewRecorder.swift         # Main coordinator
+│       ├── MetalRecorder.swift             # Metal texture bridge
+│       ├── MetalRenderer.swift             # GPU texture blit
+│       ├── AudioGraphBridge.mm             # Obj-C++ audio bridge
+│       ├── AVAssetWriterWrapper.swift      # VideoToolbox encoder
+│       ├── AudioMixer.swift                # AVAudioEngine mixer
+│       ├── BackgroundUploader.swift        # BGTaskScheduler upload
+│       ├── CrashRecoveryManager.swift      # WAL + checkpoint
+│       └── TimestampSync.swift             # CMAudioClock sync
+│
+├── common/                             # Shared C++ Core
+│   └── cpp/
+│       ├── include/
+│       │   ├── audio_graph.h
+│       │   ├── audio_node.h
+│       │   ├── audio_buffer.h
+│       │   ├── plugin_interface.h
+│       │   └── sdk_export.h
+│       ├── src/
+│       │   ├── audio_graph.cpp
+│       │   ├── audio_buffer.cpp
+│       │   ├── plugin_registry.cpp
+│       │   └── memory_arena.cpp
+│       ├── nodes/
+│       │   ├── aec/
+│       │   │   ├── aec_node.cpp
+│       │   │   └── webrtc_aec_wrapper.cpp
+│       │   ├── ns/
+│       │   │   ├── rnnoise_node.cpp
+│       │   │   └── webrtc_ns_node.cpp
+│       │   ├── agc/
+│       │   │   ├── agc_node.cpp
+│       │   │   └── compressor.cpp
+│       │   ├── mixer/
+│       │   │   └── mixer_node.cpp
+│       │   └── src/
+│       │       └── speex_src_node.cpp
+│       ├── buffers/
+│       │   ├── spsc_ring_buffer.h
+│       │   ├── buffer_pool.h
+│       │   └── memory_arena.h
+│       ├── sync/
+│       │   ├── timestamp_sync.h
+│       │   └── drift_corrector.h
+│       ├── recovery/
+│       │   ├── wal_log.h
+│       │   ├── checkpoint.h
+│       │   └── mp4_repair.h
+│       └── third_party/
+│           ├── webrtc_apm/               # WebRTC audio processing
+│           ├── rnnoise/                  # ML noise suppression
+│           ├── speexdsp/                 # Sample rate conversion
+│           └── minimp4/                  # MP4 repair utility
+│
+├── test/                               # Unit Tests
+│   ├── dart/
+│   │   ├── flutter_recorder_test.dart
+│   │   ├── session_state_test.dart
+│   │   └── upload_manager_test.dart
+│   ├── android/
+│   │   └── NativeRecorderTest.kt
+│   └── ios/
+│       └── InterviewRecorderTests.swift
+│
+├── example/                            # Demo App
+│   ├── lib/main.dart
+│   ├── android/app/
+│   └── ios/Runner/
+│
+└── docs/                               # Documentation
+    ├── API_REFERENCE.md
+    ├── PLUGIN_DEVELOPMENT.md
+    ├── INTEGRATION_GUIDE.md
+    └── TROUBLESHOOTING.md
+```
+
+---
+
+## 2. Native APIs (Pigeon/FFI Bridge)
+
+### 2.1 Pigeon Definition (Type-safe, Auto-generated)
+
+```dart
+// pigeons/recorder_api.dart
+import 'package:pigeon/pigeon.dart';
+
+@ConfigurePigeon(PigeonOptions(
+  dartOut: 'lib/src/platform/native_api.dart',
+  dartTestOut: 'test/native_api_test.dart',
+  kotlinOut: 'android/src/main/kotlin/com/recorder/sdk/NativeApi.kt',
+  swiftOut: 'ios/Classes/NativeApi.swift',
+))
+
+// ==================== CONFIGURATION ====================
+
+class RecorderConfig {
+  late VideoConfig video;
+  late AudioConfig audio;
+  late UploadConfig upload;
+  late String sessionId;
+}
+
+class VideoConfig {
+  late int width;           // 1920 for 1080p
+  late int height;          // 1080 for 1080p
+  late int fps;             // 30
+  late int bitrate;         // 8000000 (8 Mbps)
+  late String codec;        // "h264" | "hevc" | "av1"
+  late String profile;      // "high" | "main" | "baseline"
+}
+
+class AudioConfig {
+  late int sampleRate;      // 48000
+  late int channels;        // 2
+  late int bitrate;         // 192000
+  late String codec;        // "aac" | "opus"
+  late bool enableAec;      // true
+  late bool enableNs;       // true
+  late bool enableAgc;      // true
+}
+
+class UploadConfig {
+  late String backend;      // "s3" | "gcs" | "azure"
+  late String region;
+  late String bucket;
+  late int chunkSize;       // 5242880 (5MB)
+  late int maxRetries;
+}
+
+// ==================== COMMANDS ====================
+
+@HostApi()
+abstract class NativeRecorderApi {
+  @async
+  void initialize(RecorderConfig config);
+  
+  @async
+  String startRecording();
+  
+  @async
+  void pauseRecording();
+  
+  @async
+  void resumeRecording();
+  
+  @async
+  RecordingResult stopRecording();
+  
+  @async
+  void pushTtsAudio(Uint8List pcmData, int timestampUs);
+  
+  @async
+  void onFlutterFrame(FlutterFrame frame);
+  
+  @async
+  void setAIVolume(double volume);      // 0.0 - 1.0
+  
+  @async
+  void setMicVolume(double volume);       // 0.0 - 1.0
+  
+  @async
+  RecordingStatus getStatus();
+  
+  @async
+  void release();
+}
+
+// ==================== EVENTS ====================
+
+@FlutterApi()
+abstract class RecorderEventApi {
+  void onRecordingEvent(RecordingEvent event);
+  void onUploadProgress(UploadProgress progress);
+  void onError(RecorderError error);
+  void onMetrics(PerformanceMetrics metrics);
+}
+
+// ==================== DATA MODELS ====================
+
+class FlutterFrame {
+  late int textureId;
+  late Float64List transformMatrix;  // 4x4 column-major
+  late int timestampUs;
+  late int frameIndex;
+}
+
+class RecordingResult {
+  late String filePath;
+  late int durationMs;
+  late int fileSizeBytes;
+  late String checksum;
+  late String? uploadUrl;
+}
+
+class RecordingEvent {
+  late String type;         // "started" | "paused" | "resumed" | "stopped" | "error"
+  late String sessionId;
+  late int timestampUs;
+  late String? payload;
+}
+
+class UploadProgress {
+  late String sessionId;
+  late int bytesUploaded;
+  late int totalBytes;
+  late int chunksCompleted;
+  late int totalChunks;
+}
+
+class RecorderError {
+  late String code;           // "encoder_error" | "upload_error" | "memory_error"
+  late String message;
+  late bool isRecoverable;
+}
+
+class PerformanceMetrics {
+  late double cpuUsage;       // 0.0 - 1.0
+  late int memoryUsageMB;
+  late double actualFps;
+  late int droppedFrames;
+  late double audioDriftMs;
+}
+```
+
+---
+
+## 3. Flutter Plugin Registration
+
+```dart
+// lib/flutter_recording_sdk.dart
+library flutter_recording_sdk;
+
+export 'src/core/flutter_recorder.dart';
+export 'src/core/recording_session.dart';
+export 'src/models/recorder_config.dart';
+export 'src/models/recording_result.dart';
+export 'src/encoder/video_encoder.dart';
+export 'src/encoder/audio_encoder.dart';
+export 'src/encoder/muxer.dart';
+export 'src/upload/upload_backend.dart';
+export 'src/analytics/analytics_backend.dart';
+
+// Plugin registration for Flutter
+class FlutterRecordingSdk {
+  static const MethodChannel _channel = 
+      MethodChannel('com.recorder.sdk');
+  
+  static void registerWith(Registrar registrar) {
+    // Auto-registered via pubspec.yaml flutter.plugin.platforms
+  }
+}
+```
+
+```yaml
+# pubspec.yaml
+name: flutter_recording_sdk
+description: Commercial-grade Flutter recording SDK with hardware encoding
+version: 1.0.0
+homepage: https://recorder.sdk
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  pigeon: ^12.0.0
+  ffi: ^2.1.0
+  path_provider: ^2.1.0
+  crypto: ^3.0.0
+  dio: ^5.0.0
+  workmanager: ^0.5.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  mockito: ^5.4.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.recorder.sdk
+        pluginClass: FlutterRecorderPlugin
+      ios:
+        pluginClass: FlutterRecorderPlugin
+```
+
+---
+
+## 4. Core Dart Implementation
+
+```dart
+// lib/src/core/flutter_recorder.dart
+import 'dart:async';
+import 'dart:typed_data';
+
+/// Commercial-grade Flutter recording SDK.
+/// 
+/// Singleton pattern ensures only one recording session exists at a time.
+/// Thread-safe across all platforms.
+class FlutterRecorder {
+  static FlutterRecorder? _instance;
+  static final _lock = Object();
+  
+  final NativeRecorderApi _nativeApi;
+  final PluginRegistry _plugins;
+  final MetricsCollector _metrics;
+  
+  RecordingSession? _activeSession;
+  final _eventController = StreamController<RecordingEvent>.broadcast();
+  
+  // Private constructor
+  FlutterRecorder._(this._nativeApi, this._plugins, this._metrics);
+  
+  /// Get singleton instance
+  static Future<FlutterRecorder> getInstance() async {
+    if (_instance != null) return _instance!;
+    
+    // Initialize native bridge
+    final nativeApi = NativeRecorderApi();
+    final plugins = PluginRegistry();
+    final metrics = MetricsCollector();
+    
+    _instance = FlutterRecorder._(nativeApi, plugins, metrics);
+    return _instance!;
+  }
+  
+  /// Initialize SDK with configuration
+  /// 
+  /// Must be called before creating any sessions.
+  /// Idempotent — safe to call multiple times.
+  Future<void> initialize(RecorderConfig config) async {
+    _metrics.recordEvent('sdk_initialize', {
+      'resolution': '${config.video.width}x${config.video.height}',
+      'fps': config.video.fps,
+    });
+    
+    // Validate configuration
+    _validateConfig(config);
+    
+    // Initialize native layer
+    await _nativeApi.initialize(config);
+    
+    // Initialize plugins
+    await _plugins.initialize(config);
+  }
+  
+  /// Create a new recording session
+  /// 
+  /// Throws [RecorderException] if a session is already active.
+  Future<RecordingSession> createSession() async {
+    if (_activeSession != null && !_activeSession!.isComplete) {
+      throw RecorderException(
+        code: 'SESSION_ACTIVE',
+        message: 'Another recording session is already active',
+      );
+    }
+    
+    final sessionId = _generateSessionId();
+    _activeSession = RecordingSession(
+      sessionId: sessionId,
+      nativeApi: _nativeApi,
+      plugins: _plugins,
+      metrics: _metrics,
+      eventStream: _eventController.stream,
+    );
+    
+    return _activeSession!;
+  }
+  
+  /// Register a custom plugin implementation
+  /// 
+  /// Allows customers to inject their own encoders, upload backends, etc.
+  void registerPlugin<T extends Plugin>(PluginType type, PluginFactory<T> factory) {
+    _plugins.register(type, factory);
+  }
+  
+  /// Get current recording status
+  Future<RecordingStatus> getStatus() => _nativeApi.getStatus();
+  
+  /// Release all resources
+  /// 
+  /// Terminates any active recording. Call on app shutdown.
+  Future<void> dispose() async {
+    if (_activeSession != null) {
+      await _activeSession!.stop();
+    }
+    await _nativeApi.release();
+    await _eventController.close();
+    _instance = null;
+  }
+  
+  // Internal
+  void _validateConfig(RecorderConfig config) {
+    assert(config.video.width > 0 && config.video.height > 0);
+    assert(config.video.fps == 30 || config.video.fps == 60);
+    assert(config.audio.sampleRate == 48000);
+  }
+  
+  String _generateSessionId() {
+    return '${DateTime.now().millisecondsSinceEpoch}_${_randomString(8)}';
+  }
+  
+  String _randomString(int length) {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    return List.generate(length, (_) => chars[DateTime.now().microsecond % chars.length]).join();
+  }
+}
+```
+
+```dart
+// lib/src/core/recording_session.dart
+import 'dart:async';
+import 'dart:typed_data';
+
+/// State machine for a single recording session.
+/// 
+/// States: idle → initializing → recording → paused → finalizing → completed
+///                                    ↓___________________________↑
+///                                    error (terminal)
+class RecordingSession {
+  final String sessionId;
+  final NativeRecorderApi _nativeApi;
+  final PluginRegistry _plugins;
+  final MetricsCollector _metrics;
+  final Stream<RecordingEvent> _eventStream;
+  
+  SessionState _state = SessionState.idle;
+  final _stateController = StreamController<SessionState>.broadcast();
+  final _progressController = StreamController<RecordingProgress>.broadcast();
+  
+  Timer? _metricsTimer;
+  DateTime? _startTime;
+  
+  RecordingSession({
+    required this.sessionId,
+    required NativeRecorderApi nativeApi,
+    required PluginRegistry plugins,
+    required MetricsCollector metrics,
+    required Stream<RecordingEvent> eventStream,
+  }) : _nativeApi = nativeApi,
+       _plugins = plugins,
+       _metrics = metrics,
+       _eventStream = eventStream;
+  
+  SessionState get state => _state;
+  bool get isComplete => _state == SessionState.completed || _state == SessionState.error;
+  Stream<SessionState> get stateStream => _stateController.stream;
+  Stream<RecordingProgress> get progressStream => _progressController.stream;
+  
+  /// Start recording
+  /// 
+  /// Transitions: idle → initializing → recording
+  Future<void> start() async {
+    _assertState(SessionState.idle);
+    
+    _transitionTo(SessionState.initializing);
+    
+    try {
+      // Begin native recording
+      final filePath = await _nativeApi.startRecording();
+      
+      _startTime = DateTime.now();
+      _transitionTo(SessionState.recording);
+      
+      // Start metrics collection
+      _startMetricsCollection();
+      
+      _metrics.recordEvent('session_started', {
+        'session_id': sessionId,
+        'file_path': filePath,
+      });
+      
+    } catch (e) {
+      _transitionTo(SessionState.error);
+      rethrow;
+    }
+  }
+  
+  /// Push AI TTS audio to the recording
+  /// 
+  /// PCM data should be 48kHz, 16-bit, stereo interleaved.
+  Future<void> pushTTS(Uint8List pcmData) async {
+    _assertState(SessionState.recording);
+    
+    final timestampUs = _elapsedMicroseconds;
+    await _nativeApi.pushTtsAudio(pcmData, timestampUs);
+  }
+  
+  /// Notify native side of new Flutter frame
+  /// 
+  /// Called by FrameCapture scheduler at 30fps.
+  Future<void> onFrameRendered(FlutterFrame frame) async {
+    if (_state != SessionState.recording) return;
+    
+    await _nativeApi.onFlutterFrame(frame);
+  }
+  
+  /// Pause recording (keep session alive)
+  Future<void> pause() async {
+    _assertState(SessionState.recording);
+    await _nativeApi.pauseRecording();
+    _transitionTo(SessionState.paused);
+  }
+  
+  /// Resume paused recording
+  Future<void> resume() async {
+    _assertState(SessionState.paused);
+    await _nativeApi.resumeRecording();
+    _transitionTo(SessionState.recording);
+  }
+  
+  /// Stop recording and finalize MP4
+  /// 
+  /// Transitions: recording → finalizing → completed
+  Future<RecordingResult> stop() async {
+    _assertState(SessionState.recording, SessionState.paused);
+    
+    _transitionTo(SessionState.finalizing);
+    _stopMetricsCollection();
+    
+    try {
+      final result = await _nativeApi.stopRecording();
+      
+      _transitionTo(SessionState.completed);
+      
+      _metrics.recordEvent('session_completed', {
+        'session_id': sessionId,
+        'duration_ms': result.durationMs,
+        'file_size': result.fileSizeBytes,
+      });
+      
+      return result;
+      
+    } catch (e) {
+      _transitionTo(SessionState.error);
+      rethrow;
+    }
+  }
+  
+  // Internal
+  void _transitionTo(SessionState newState) {
+    _state = newState;
+    _stateController.add(newState);
+  }
+  
+  void _assertState(SessionState expected, [SessionState? alt]) {
+    if (_state != expected && _state != alt) {
+      throw RecorderException(
+        code: 'INVALID_STATE',
+        message: 'Expected $expected, got $_state',
+      );
+    }
+  }
+  
+  int get _elapsedMicroseconds {
+    if (_startTime == null) return 0;
+    return DateTime.now().difference(_startTime!).inMicroseconds;
+  }
+  
+  void _startMetricsCollection() {
+    _metricsTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+      final metrics = await _nativeApi.getStatus() as PerformanceMetrics;
+      _progressController.add(RecordingProgress(
+        cpuUsage: metrics.cpuUsage,
+        memoryMB: metrics.memoryUsageMB,
+        actualFps: metrics.actualFps,
+        droppedFrames: metrics.droppedFrames,
+      ));
+    });
+  }
+  
+  void _stopMetricsCollection() => _metricsTimer?.cancel();
+}
+```
+
+---
+
+## 5. Crash Recovery Implementation
+
+```cpp
+// common/cpp/recovery/wal_log.h
+#pragma once
+#include <string>
+#include <fstream>
+#include <mutex>
+#include <cstdint>
+
+namespace recorder {
+
+// WAL entry format (binary, append-only)
+struct WALEntry {
+    uint64_t timestampUs;
+    uint64_t sessionId;
+    uint32_t type;           // 0=checkpoint, 1=frame, 2=audio, 3=error
+    uint64_t videoPts;
+    uint64_t audioPts;
+    uint64_t fileOffset;
+    uint32_t encoderStateHash;
+    uint32_t checksum;       // CRC32 of entry
+};
+
+class WALLog {
+public:
+    explicit WALLog(const std::string& basePath);
+    
+    // Append entry (fsync every 5 entries for durability)
+    void append(const WALEntry& entry);
+    
+    // Read all entries for recovery
+    std::vector<WALEntry> readAll();
+    
+    // Truncate log after successful finalize
+    void clear();
+    
+    // Check for incomplete session
+    bool hasIncompleteSession(uint64_t& outSessionId);
+    
+private:
+    std::string logPath_;
+    std::ofstream writer_;
+    std::mutex mutex_;
+    int entryCount_ = 0;
+    
+    uint32_t calculateChecksum(const WALEntry& entry);
+    void fsync();
+};
+
+} // namespace recorder
+```
+
+```cpp
+// common/cpp/recovery/checkpoint.h
+#pragma once
+#include <string>
+#include <cstdint>
+
+namespace recorder {
+
+// Checkpoint every 5 seconds during recording
+struct Checkpoint {
+    uint64_t timestampUs;
+    uint64_t sessionId;
+    
+    // Video encoder state
+    uint64_t lastVideoPts;
+    uint64_t lastKeyFramePts;
+    uint32_t gopCount;
+    
+    // Audio encoder state
+    uint64_t lastAudioPts;
+    uint64_t totalAudioSamples;
+    
+    // Muxer state
+    uint64_t moovOffset;        // MP4 moov atom position
+    uint64_t mdatOffset;        // MP4 mdat atom position
+    
+    // File integrity
+    uint64_t fileSize;
+    uint32_t fileChecksum;
+};
+
+class CheckpointManager {
+public:
+    explicit CheckpointManager(const std::string& basePath);
+    
+    void save(const Checkpoint& cp);
+    bool loadLatest(Checkpoint& out);
+    void clear();
+    
+private:
+    std::string checkpointPath_;
+};
+
+} // namespace recorder
+```
+
+```dart
+// lib/src/recovery/crash_recovery.dart
+import 'dart:io';
+
+/// Manages recovery from app crashes during recording.
+/// 
+/// On app launch, checks WAL for incomplete sessions and attempts recovery.
+class CrashRecovery {
+  final WALLog _wal;
+  final CheckpointManager _checkpoints;
+  final MP4Repair _mp4Repair;
+  
+  CrashRecovery(this._wal, this._checkpoints, this._mp4Repair);
+  
+  /// Check for and recover incomplete session
+  /// 
+  /// Returns recovered file path if successful, null otherwise.
+  Future<String?> recoverIfNeeded() async {
+    final sessionId = await _wal.getIncompleteSession();
+    if (sessionId == null) return null;
+    
+    // Load latest checkpoint
+    final checkpoint = await _checkpoints.loadLatest(sessionId);
+    if (checkpoint == null) {
+      // No checkpoint — can't recover
+      await _cleanup(sessionId);
+      return null;
+    }
+    
+    // Validate partial MP4
+    final partialFile = File(_getFilePath(sessionId));
+    if (!await partialFile.exists()) {
+      await _cleanup(sessionId);
+      return null;
+    }
+    
+    // Repair MP4 (fix moov atom if truncated)
+    final repaired = await _mp4Repair.repair(
+      inputPath: partialFile.path,
+      checkpoint: checkpoint,
+    );
+    
+    if (repaired != null) {
+      await _wal.clear(sessionId);
+      await _checkpoints.clear(sessionId);
+      
+      // Trigger background upload of recovered file
+      await _queueUpload(repaired);
+    }
+    
+    return repaired;
+  }
+  
+  Future<void> _cleanup(String sessionId) async {
+    await _wal.clear(sessionId);
+    await _checkpoints.clear(sessionId);
+    
+    final file = File(_getFilePath(sessionId));
+    if (await file.exists()) await file.delete();
+  }
+  
+  String _getFilePath(String sessionId) {
+    final dir = Directory.systemTemp;
+    return '${dir.path}/recording_$sessionId.mp4';
+  }
+}
+```
+
+---
+
+## 6. Memory Optimization
+
+```cpp
+// common/cpp/memory/buffer_pool.h
+#pragma once
+#include <vector>
+#include <memory>
+#include <mutex>
+
+namespace recorder {
+
+// Fixed-size buffer for frame data
+struct FrameBuffer {
+    static constexpr size_t SIZE = 1920 * 1080 * 4;  // 1080p RGBA
+    alignas(64) uint8_t data[SIZE];
+    bool inUse = false;
+};
+
+// Object pool for frame buffers
+class FrameBufferPool {
+public:
+    static constexpr int POOL_SIZE = 3;  // Triple buffering
+    
+    FrameBufferPool() {
+        buffers_.reserve(POOL_SIZE);
+        for (int i = 0; i < POOL_SIZE; i++) {
+            buffers_.push_back(std::make_unique<FrameBuffer>());
+        }
+    }
+    
+    // Acquire buffer (non-blocking, returns null if all in use)
+    FrameBuffer* acquire() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto& buf : buffers_) {
+            if (!buf->inUse) {
+                buf->inUse = true;
+                return buf.get();
+            }
+        }
+        return nullptr;  // All buffers in use — drop frame
+    }
+    
+    void release(FrameBuffer* buf) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        buf->inUse = false;
+    }
+    
+private:
+    std::vector<std::unique_ptr<FrameBuffer>> buffers_;
+    std::mutex mutex_;
+};
+
+// Memory arena for audio processing
+class MemoryArena {
+public:
+    explicit MemoryArena(size_t size = 64 * 1024 * 1024);  // 64MB
+    
+    void* allocate(size_t size);
+    void reset();  // Reset bump pointer (O(1))
+    
+private:
+    std::vector<uint8_t> memory_;
+    size_t offset_ = 0;
+};
+
+} // namespace recorder
+```
+
+---
+
+## 7. Implementation Plan (12-Week Sprint)
+
+| Week | Deliverable | Components |
+|------|-------------|------------|
+| **1-2** | Foundation | Project scaffolding, Pigeon API, plugin registry, CI/CD |
+| **3-4** | Video Pipeline | Android EGL + MediaCodec, iOS Metal + AVAssetWriter, 1080p30 |
+| **5-6** | Audio Pipeline | WebRTC APM integration, Float32 mixer, AAC encoding |
+| **7** | Synchronization | Timestamp sync, drift corrector, A/V alignment |
+| **8** | Upload System | Chunked upload, resume logic, S3/GCS backends |
+| **9** | Crash Recovery | WAL logging, checkpoints, MP4 repair |
+| **10** | Memory Optimization | Buffer pools, memory arena, pressure handling |
+| **11** | Testing & QA | Unit tests, integration tests, performance benchmarks |
+| **12** | Documentation | API reference, integration guide, plugin development docs |
+
+---
+
+## Downloadable Diagrams
+
+[SDK Architecture Overview](sandbox:///mnt/agents/output/sdk_architecture_overview.png)
+
+[Recording Sequence Diagram](sandbox:///mnt/agents/output/sequence_diagram.png)
+
+[Crash Recovery & Plugin System](sandbox:///mnt/agents/output/crash_recovery_plugins.png)
